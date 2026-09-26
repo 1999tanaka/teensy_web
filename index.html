@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teensy Web Controller</title>
+  <meta name="description" content="Teensy 4.1 への .hex 書き込みと、シリアル通信によるコマンド操作を行う Web アプリ">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='8' width='16' height='16' rx='3' fill='%232563eb'/%3E%3Cpath d='M12 3v5M16 3v5M20 3v5M12 24v5M16 24v5M20 24v5M3 12h5M3 16h5M3 20h5M24 12h5M24 16h5M24 20h5' stroke='%232563eb' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header id="topbar" class="topbar">
+    <div class="brand">Teensy Web</div>
+
+    <div class="bar-group">
+      <button id="btnFolder" class="btn" type="button">フォルダ選択</button>
+      <span id="folderName" class="folder-name">未選択</span>
+    </div>
+
+    <div class="bar-group">
+      <select id="portSelect" class="input select" aria-label="シリアルポート"></select>
+      <button id="btnAddPort" class="btn" type="button" title="Teensy のシリアルポートを選んで一覧に追加します">ポート追加</button>
+      <button id="btnConnect" class="btn primary" type="button">接続</button>
+      <button id="btnDisconnect" class="btn" type="button">切断</button>
+      <span id="serialStatus" class="status-pill" data-status="disconnected">未接続</span>
+    </div>
+
+    <div class="bar-group last-written">
+      <span class="muted">最後に書き込み:</span>
+      <strong id="lastWritten">不明</strong>
+    </div>
+
+    <div class="bar-spacer"></div>
+    <button id="btnEdit" class="btn" type="button" aria-pressed="false" disabled>編集モード</button>
+  </header>
+
+  <div id="notices" class="notices"></div>
+
+  <main class="layout">
+    <section class="programs" aria-label="プログラム一覧">
+      <div id="programList" class="program-list"></div>
+    </section>
+
+    <aside class="serial-panel" aria-label="シリアル">
+      <form id="sendForm" class="send-form" autocomplete="off">
+        <input id="sendInput" class="input mono" type="text" placeholder="コマンドを入力して Enter で送信" aria-label="送信するコマンド" enterkeyhint="send">
+        <button class="btn primary" type="submit">送信</button>
+      </form>
+      <div class="monitor-toolbar">
+        <button id="btnClear" class="btn small" type="button">クリア</button>
+        <label class="check"><input id="chkAutoscroll" type="checkbox" checked> 自動スクロール</label>
+        <label class="check"><input id="chkTimestamp" type="checkbox"> 時刻</label>
+        <span class="bar-spacer"></span>
+        <button id="btnSaveLog" class="btn small" type="button">ログ保存</button>
+      </div>
+      <div class="monitor-wrap">
+        <div id="monitor" class="monitor" role="log" tabindex="0" aria-label="シリアルモニタ"></div>
+        <button id="jumpLatest" class="btn small jump-latest" type="button" hidden>▼ 最新へ</button>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="bootDialog" aria-labelledby="bootDialogTitle">
+    <h2 id="bootDialogTitle">Teensy をブートローダーにしてください</h2>
+    <p id="bootDialogLead"></p>
+    <ol>
+      <li>「Teensy を選択」を押し、一覧に表示された Teensy を選んで「接続」を押します。<br><span class="muted small">初回や、ブラウザが Teensy を覚えていない場合に必要です。</span></li>
+      <li>一覧に何も表示されない場合は、Teensy 本体のプログラムボタン（基板上の小さな押しボタン）を 1 回押してください。一覧に現れます。</li>
+    </ol>
+    <div class="dialog-actions">
+      <button id="bootCancel" class="btn" type="button">キャンセル</button>
+      <button id="bootSelect" class="btn primary" type="button">Teensy を選択</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
