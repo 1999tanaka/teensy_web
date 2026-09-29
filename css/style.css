@@ -165,7 +165,8 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.6; }
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(340px, 32vw, 560px);
+  /* --serial-w はシリアル欄の左端をドラッグすると設定される */
+  grid-template-columns: minmax(0, 1fr) var(--serial-w, clamp(340px, 32vw, 560px));
   align-items: start;
   gap: 16px;
   padding: 16px;
@@ -173,11 +174,13 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.6; }
 
 /* ---------------------------------------------------------------- プログラム一覧 */
 
+/* カードの段組みは画面幅ではなく、一覧に使える幅で切り替える（シリアル欄の幅を変えられるため） */
+.programs { container: programs / inline-size; }
 .program-list { display: flex; flex-direction: column; gap: 12px; }
 
 .program {
   display: grid;
-  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr) minmax(170px, 240px);
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr) minmax(190px, 280px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -209,6 +212,39 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.6; }
 .cmd { display: flex; flex-direction: column; gap: 3px; }
 .btn-cmd { width: 100%; min-height: 36px; font-family: var(--mono); font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
 .cmd-desc { color: var(--muted); font-size: 12px; text-align: center; overflow-wrap: anywhere; }
+
+/* { } の入力欄つきコマンド */
+.cmd-template {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.cmd-line { flex: 1 1 auto; min-width: 0; font-family: var(--mono); font-weight: 600; line-height: 2; overflow-wrap: anywhere; }
+.cmd-text { white-space: pre-wrap; }
+.cmd-var {
+  field-sizing: content;
+  min-width: 3ch;
+  max-width: 100%;
+  margin: 0 1px;
+  padding: 1px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  text-align: center;
+}
+.cmd-var:focus { outline: none; background: var(--surface); box-shadow: 0 0 0 2px var(--accent-soft); }
+.cmd-var[aria-invalid="true"] { border-color: var(--danger); background: var(--danger-soft); }
+.cmd-send { margin-left: auto; }
+.cmd-hint { margin-top: -6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.cmd-preview { color: var(--accent); font-size: 12px; overflow-wrap: anywhere; }
 
 .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .cmd-edit-list { display: flex; flex-direction: column; gap: 8px; }
@@ -257,6 +293,35 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.6; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+
+/* シリアル欄の左端のつまみ（一覧との隙間 16px と、欄の余白に少しかかる範囲でつかめる） */
+.resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -16px;
+  width: 22px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  width: 4px;
+  height: 48px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  transform: translateY(-50%);
+  transition: height .15s, background-color .15s;
+}
+.resizer:hover::after,
+.resizer:focus-visible::after,
+.is-resizing .resizer::after { height: 120px; background: var(--accent); }
+.resizer:focus-visible { outline: none; }
+.is-resizing, .is-resizing * { cursor: col-resize !important; user-select: none !important; }
+
 .send-form { display: flex; gap: 8px; }
 .send-form .input { flex: 1; min-width: 0; }
 .monitor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
@@ -314,17 +379,27 @@ dialog li + li { margin-top: 6px; }
 }
 .toast[data-kind="error"] { background: #b91c1c; }
 
-/* ---------------------------------------------------------------- 画面幅が狭いとき */
+/* ---------------------------------------------------------------- 幅が狭いとき */
 
-@media (max-width: 1280px) {
-  .program { grid-template-columns: minmax(160px, 210px) minmax(0, 1fr); }
+/* 一覧の幅が狭いとき: コマンドボタンを下の段に横並び */
+@container programs (max-width: 820px) {
+  .program { grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); }
   .program > .p-cmds { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); }
-  .program:not(.is-editing) > .p-cmds { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .program:not(.is-editing) > .p-cmds { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+  .program:not(.is-editing) .cmd { flex: 1 1 160px; max-width: 260px; }
+  .program:not(.is-editing) .cmd.has-vars { flex-basis: 260px; max-width: 440px; }
+  .cmd-edit-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 }
 
+/* さらに狭いとき: 1 列 */
+@container programs (max-width: 520px) {
+  .program { grid-template-columns: minmax(0, 1fr); }
+  .program > * + * { border-left: 0; border-top: 1px solid var(--border); }
+}
+
+/* 画面が狭いとき: シリアル欄を下に回す */
 @media (max-width: 900px) {
   .layout { grid-template-columns: minmax(0, 1fr); }
   .serial-panel { position: static; height: 70vh; }
-  .program { grid-template-columns: minmax(0, 1fr); }
-  .program > * + * { border-left: 0; border-top: 1px solid var(--border); }
+  .resizer { display: none; }
 }

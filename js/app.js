@@ -4,6 +4,7 @@ import { parseIntelHex, TEENSY41 } from './hex.js';
 import { findHalfKay, requestHalfKay, detectModel, flashHalfKay } from './halfkay.js';
 import { SerialManager, TEENSY_VID } from './serial.js';
 import { Monitor } from './monitor.js';
+import { parseCommand, variablesOf, hasVariables, buildCommand } from './template.js';
 import { h, hex4, formatBytes, formatDateTime, formatFileStamp } from './util.js';
 
 const CONFIG_FILE = 'teensy_web.json';
@@ -35,6 +36,13 @@ const state = {
   ports: [],
 };
 
+// 表示の好み（ブラウザごと）。serialWidth が null なら初期幅
+const prefs = { autoscroll: true, showTime: false, serialWidth: null, ...lsGet(PREFS_KEY, {}) };
+const savePrefs = () => lsSet(PREFS_KEY, prefs);
+
+// コマンドの入力欄に入れた値。再描画しても残し、ページを開き直すと初期値に戻る
+const commandValues = new Map(); // commandId -> { command, values }
+
 let serial = null;
 let monitor = null;
 let lastSerialStatus = 'disconnected';
@@ -60,6 +68,7 @@ function init() {
   monitor = new Monitor($('#monitor'), $('#jumpLatest'));
   bindTopbar();
   bindSerialPanel();
+  bindResizer();
   observeTopbar();
 
   const missing = [];
@@ -470,10 +479,60 @@ function renderProgramView(p) {
       p.description || '説明はまだありません。編集モードで入力できます。'),
     h('div', { class: 'p-cmds' },
       p.commands.length
-        ? p.commands.map((c) => h('div', { class: 'cmd' },
-          h('button', { class: 'btn btn-cmd', type: 'button', title: `"${c.command}" を送信`, onclick: () => sendProgramCommand(p.id, c.id) }, c.command),
-          c.description ? h('div', { class: 'cmd-desc' }, c.description) : null))
+        ? p.commands.map((c) => renderCommandView(p, c))
         : h('p', { class: 'muted small' }, 'コマンドボタンはありません')));
+}
+
+function renderCommandView(p, c) {
+  const parts = parseCommand(c.command);
+  const desc = c.description ? h('div', { class: 'cmd-desc' }, c.description) : null;
+  if (!hasVariables(parts)) {
+    return h('div', { class: 'cmd' },
+      h('button', { class: 'btn btn-cmd', type: 'button', title: `"${c.command}" を送信`, onclick: () => sendProgramCommand(p, c.command) }, c.command),
+      desc);
+  }
+
+  // { } の部分を入力欄にする。値は再描画しても残す（テンプレートを書き換えたら初期値に戻す）
+  const saved = commandValues.get(c.id);
+  const values = saved?.command === c.command ? saved.values : variablesOf(parts).map((v) => v.value);
+  const inputs = [];
+  const remember = () => commandValues.set(c.id, { command: c.command, values: inputs.map((input) => input.value) });
+  const line = h('span', { class: 'cmd-line' }, parts.map((part) => {
+    if (part.type === 'text') return h('span', { class: 'cmd-text' }, part.text);
+    const index = inputs.length;
+    const input = h('input', {
+      class: 'cmd-var',
+      type: 'text',
+      value: values[index] ?? '',
+      size: Math.max(2, (values[index] ?? '').length),
+      autocomplete: 'off',
+      title: `初期値: ${part.value || '（空）'}`,
+      'aria-label': `値 ${index + 1}`,
+      oninput: () => {
+        input.removeAttribute('aria-invalid');
+        remember();
+      },
+    });
+    input.spellcheck = false;
+    inputs.push(input);
+    return input;
+  }));
+  const submit = (e) => {
+    e.preventDefault();
+    const empty = inputs.find((input) => !input.value.trim());
+    if (empty) {
+      empty.setAttribute('aria-invalid', 'true');
+      empty.focus();
+      monitor.error('値が入っていない入力欄があります');
+      return;
+    }
+    sendProgramCommand(p, buildCommand(parts, inputs.map((input) => input.value)));
+  };
+  return h('div', { class: 'cmd has-vars' },
+    h('form', { class: 'cmd-template', onsubmit: submit },
+      line,
+      h('button', { class: 'btn primary small cmd-send', type: 'submit', title: '入力した値でコマンドを送信' }, '送信')),
+    desc);
 }
 
 function renderProgramEdit(p, index, total) {
@@ -492,13 +551,23 @@ function renderProgramEdit(p, index, total) {
       h('textarea', { class: 'input', rows: 6, value: p.description, placeholder: 'プログラムの説明', oninput: (e) => { p.description = e.target.value; markDirty(); } })),
     h('div', { class: 'p-cmds' },
       h('span', { class: 'field-label' }, 'コマンドボタン'),
+      h('p', { class: 'cmd-hint' }, '{ } で囲んだ部分は、送信前に書き換えられる入力欄になります。例: Tx ch1 {03} {28} {00}'),
       h('div', { class: 'cmd-edit-list' }, p.commands.map((c, i) => renderCommandEdit(p, c, i))),
       h('button', { class: 'btn small', type: 'button', onclick: () => addCommand(p.id) }, '＋ コマンド追加')));
 }
 
 function renderCommandEdit(p, c, index) {
+  // { } を使ったときに、入力欄がいくつできるかをその場で見せる
+  const preview = h('div', { class: 'cmd-preview' });
+  const updatePreview = () => {
+    const vars = variablesOf(parseCommand(c.command));
+    preview.hidden = !vars.length;
+    preview.textContent = `入力欄 ${vars.length} 個（初期値: ${vars.map((v) => v.value || '空').join(' / ')}）`;
+  };
+  updatePreview();
   return h('div', { class: 'cmd-edit', dataset: { cmdId: c.id } },
-    h('input', { class: 'input mono', type: 'text', value: c.command, placeholder: 'コマンド（例: start）', 'aria-label': 'コマンド', oninput: (e) => { c.command = e.target.value; markDirty(); } }),
+    h('input', { class: 'input mono', type: 'text', value: c.command, placeholder: 'コマンド（例: start）', 'aria-label': 'コマンド', oninput: (e) => { c.command = e.target.value; markDirty(); updatePreview(); } }),
+    preview,
     h('input', { class: 'input', type: 'text', value: c.description, placeholder: '説明（例: 開始）', 'aria-label': 'コマンドの説明', oninput: (e) => { c.description = e.target.value; markDirty(); } }),
     h('div', { class: 'row-actions' },
       h('button', { class: 'btn icon', type: 'button', title: '上へ移動', 'aria-label': '上へ移動', disabled: index === 0, onclick: () => moveCommand(p.id, index, -1) }, '▲'),
@@ -796,18 +865,17 @@ async function sendLine(text) {
   }
 }
 
-async function sendProgramCommand(programId, commandId) {
-  const p = findProgram(programId);
-  const c = p?.commands.find((x) => x.id === commandId);
-  if (!c?.command || !ensureCanSend()) return;
+// text は入力欄の値を当てはめたあとの、実際に送るコマンド
+async function sendProgramCommand(p, text) {
+  if (!text || !ensureCanSend()) return;
   const last = state.lastWritten;
   if (last?.id !== p.id) {
     const current = last
       ? `現在 Teensy に書き込まれているのは「${findProgram(last.id)?.name || last.name || last.hexPath}」です。`
       : 'Teensy に書き込まれているプログラムが分かりません。';
-    if (!confirm(`${current}\n「${programLabel(p)}」のコマンド "${c.command}" を送信しますか？`)) return;
+    if (!confirm(`${current}\n「${programLabel(p)}」のコマンド "${text}" を送信しますか？`)) return;
   }
-  await sendLine(c.command);
+  await sendLine(text);
 }
 
 function bindSerialPanel() {
@@ -843,7 +911,6 @@ function bindSerialPanel() {
     }
   });
 
-  const prefs = { autoscroll: true, showTime: false, ...lsGet(PREFS_KEY, {}) };
   const autoscroll = $('#chkAutoscroll');
   const showTime = $('#chkTimestamp');
   autoscroll.checked = prefs.autoscroll;
@@ -853,17 +920,93 @@ function bindSerialPanel() {
   autoscroll.addEventListener('change', () => {
     prefs.autoscroll = autoscroll.checked;
     monitor.autoscroll = autoscroll.checked;
-    lsSet(PREFS_KEY, prefs);
+    savePrefs();
     if (autoscroll.checked) monitor.scrollToBottom();
   });
   showTime.addEventListener('change', () => {
     prefs.showTime = showTime.checked;
     monitor.setShowTime(showTime.checked);
-    lsSet(PREFS_KEY, prefs);
+    savePrefs();
   });
 
   $('#btnClear').addEventListener('click', () => monitor.clear());
   $('#btnSaveLog').addEventListener('click', saveLog);
+}
+
+// ---------------------------------------------------------------- シリアル欄の幅
+
+const SERIAL_MIN_WIDTH = 300;
+const PROGRAMS_MIN_WIDTH = 360;
+
+// シリアル欄の左端をドラッグして幅を変える。ダブルクリックで初期幅、← → キーでも変えられる
+function bindResizer() {
+  const handle = $('#serialResizer');
+  const panel = $('.serial-panel');
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    const rect = panel.getBoundingClientRect();
+    const grab = rect.right - e.clientX - rect.width; // つかんだ位置と欄の端のずれ
+    let width = rect.width;
+    let moved = false;
+    let frame = 0;
+    document.body.classList.add('is-resizing');
+    const move = (ev) => {
+      moved = true;
+      width = rect.right - ev.clientX - grab;
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; setSerialWidth(width); });
+    };
+    const end = () => {
+      cancelAnimationFrame(frame);
+      if (moved) setSerialWidth(width, true); // クリックしただけなら幅を固定しない
+      document.body.classList.remove('is-resizing');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  });
+
+  handle.addEventListener('dblclick', () => setSerialWidth(null, true));
+
+  handle.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 80 : 20;
+    const width = panel.getBoundingClientRect().width;
+    if (e.key === 'ArrowLeft') setSerialWidth(width + step, true);
+    else if (e.key === 'ArrowRight') setSerialWidth(width - step, true);
+    else return;
+    e.preventDefault();
+  });
+
+  // 画面を狭めたときは、記憶した幅を入る範囲に収めて表示する
+  window.addEventListener('resize', () => {
+    if (prefs.serialWidth) setSerialWidth(prefs.serialWidth);
+  });
+  setSerialWidth(prefs.serialWidth);
+}
+
+// width = null で初期幅に戻す。save = true ならブラウザに記憶する
+function setSerialWidth(width, save = false) {
+  const root = document.documentElement;
+  if (width == null) {
+    root.style.removeProperty('--serial-w');
+  } else {
+    const layout = $('.layout');
+    const style = getComputedStyle(layout);
+    const room = layout.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      - (parseFloat(style.columnGap) || 0) - PROGRAMS_MIN_WIDTH;
+    width = Math.round(Math.min(Math.max(width, SERIAL_MIN_WIDTH), Math.max(room, SERIAL_MIN_WIDTH)));
+    root.style.setProperty('--serial-w', `${width}px`);
+  }
+  $('#serialResizer').setAttribute('aria-valuenow', String(Math.round($('.serial-panel').getBoundingClientRect().width)));
+  if (save) {
+    prefs.serialWidth = width;
+    savePrefs();
+  }
 }
 
 function saveLog() {
